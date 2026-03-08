@@ -1,5 +1,5 @@
 import { db, ref, onValue, set, get } from "./firebase.js";
-
+import * as tf from "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/+esm";
 const MODEL_URL = "https://mahtoyash.github.io/co2-monitor/model/model.json";
 const SEQ_LEN = 30;
 const FEATURE_MIN = [18.04, 44.92, 415.0, 0.0, 0.0, 0.0, 0.0];
