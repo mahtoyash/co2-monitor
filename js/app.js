@@ -1,5 +1,4 @@
 import { db, ref, onValue, set, get } from "./firebase.js";
-import * as tf from "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/+esm";
 
 const BASE_WEIGHTS_URL = "https://mahtoyash.github.io/co2-monitor/model/base_weights.json";
 const SEQ_LEN = 30;
