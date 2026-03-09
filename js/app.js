@@ -12,14 +12,8 @@ let roomModel = null;
 let prevCO2 = null;
 let co2History = [];
 let newSamplesBuffer = [];
-
-function scaleFeatures(row) {
-  return row.map((val, i) => (val - FEATURE_MIN[i]) / (FEATURE_MAX[i] - FEATURE_MIN[i]));
-}
-
-function unscaleTarget(val) {
-  return val * (TARGET_MAX - TARGET_MIN) + TARGET_MIN;
-}
+let unsubLatest = null;
+let unsubHistory = null;
 
 function buildModel() {
   const model = tf.sequential();
@@ -31,6 +25,14 @@ function buildModel() {
   model.add(tf.layers.dense({ units: 3 }));
   model.predict(tf.zeros([1, 30, 7]));
   return model;
+}
+
+function scaleFeatures(row) {
+  return row.map((val, i) => (val - FEATURE_MIN[i]) / (FEATURE_MAX[i] - FEATURE_MIN[i]));
+}
+
+function unscaleTarget(val) {
+  return val * (TARGET_MAX - TARGET_MIN) + TARGET_MIN;
 }
 
 async function loadRoomModel(roomId) {
@@ -67,7 +69,7 @@ async function saveRoomWeights(roomId) {
       }))
     );
     await set(ref(db, `model_weights/${roomId}`), weightsData);
-    console.log(`Weights saved for ${roomId}`);
+    console.log(`Weights saved for ${roomId} ✓`);
   } catch (err) {
     console.error("Weight save failed:", err);
   }
@@ -75,7 +77,7 @@ async function saveRoomWeights(roomId) {
 
 async function runPrediction(history) {
   if (!roomModel || history.length < SEQ_LEN) {
-    console.log(`Not enough history: ${history.length}/${SEQ_LEN} readings`);
+    console.log(`Not enough history: ${history.length}/${SEQ_LEN}`);
     return;
   }
   try {
@@ -124,7 +126,6 @@ async function onlineTrain(history) {
   }
 }
 
-// Chart setup
 const ctx = document.getElementById("co2-chart").getContext("2d");
 const chart = new Chart(ctx, {
   type: "line",
@@ -142,17 +143,10 @@ const chart = new Chart(ctx, {
   },
   options: {
     responsive: true,
-    plugins: {
-      legend: { display: true }
-    },
+    plugins: { legend: { display: true } },
     scales: {
-      y: {
-        beginAtZero: false,
-        title: { display: true, text: "CO2 (ppm)" }
-      },
-      x: {
-        title: { display: true, text: "Reading #" }
-      }
+      y: { beginAtZero: false, title: { display: true, text: "CO2 (ppm)" } },
+      x: { title: { display: true, text: "Reading #" } }
     }
   }
 });
@@ -165,14 +159,16 @@ function updateChart() {
 }
 
 function listenToRoom(roomId) {
-  onValue(ref(db, `rooms/${roomId}/latest`), (snapshot) => {
+  // Purane listeners unsubscribe karo
+  if (unsubLatest) unsubLatest();
+  if (unsubHistory) unsubHistory();
+
+  unsubLatest = onValue(ref(db, `rooms/${roomId}/latest`), (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
-
     document.getElementById("co2-value").textContent  = data.co2 + " ppm";
     document.getElementById("temp-value").textContent = data.temperature + " °C";
     document.getElementById("hum-value").textContent  = data.humidity + " %";
-
     if (prevCO2 !== null && (data.co2 - prevCO2) >= 200) {
       document.getElementById("spike-alert").style.display = "block";
     } else {
@@ -181,9 +177,10 @@ function listenToRoom(roomId) {
     prevCO2 = data.co2;
   });
 
-  onValue(ref(db, `rooms/${roomId}/history`), async (snapshot) => {
+  unsubHistory = onValue(ref(db, `rooms/${roomId}/history`), async (snapshot) => {
     co2History = [];
     snapshot.forEach(child => co2History.push(child.val()));
+    console.log(`History loaded: ${co2History.length} readings`);
     updateChart();
     await runPrediction(co2History);
     await onlineTrain(co2History);
