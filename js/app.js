@@ -1,7 +1,7 @@
 import { db, ref, onValue, set, get } from "./firebase.js";
 import * as tf from "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/+esm";
 
-const MODEL_URL = "https://mahtoyash.github.io/co2-monitor/model/model.json";
+const BASE_WEIGHTS_URL = "https://mahtoyash.github.io/co2-monitor/model/base_weights.json";
 const SEQ_LEN = 30;
 const FEATURE_MIN = [18.04, 44.92, 415.0, 0.0, 0.0, 0.0, 0.0];
 const FEATURE_MAX = [25.57, 58.15, 1400.0, 60.0, 23.0, 6.0, 59.0];
@@ -22,19 +22,35 @@ function unscaleTarget(val) {
   return val * (TARGET_MAX - TARGET_MIN) + TARGET_MIN;
 }
 
+function buildModel() {
+  const model = tf.sequential();
+  model.add(tf.layers.lstm({ units: 256, returnSequences: true, inputShape: [30, 7] }));
+  model.add(tf.layers.lstm({ units: 256, returnSequences: true }));
+  model.add(tf.layers.lstm({ units: 256, returnSequences: false }));
+  model.add(tf.layers.dense({ units: 32, activation: "relu" }));
+  model.add(tf.layers.dropout({ rate: 0.2 }));
+  model.add(tf.layers.dense({ units: 3 }));
+  model.predict(tf.zeros([1, 30, 7]));
+  return model;
+}
+
 async function loadRoomModel(roomId) {
   try {
+    roomModel = buildModel();
     const snapshot = await get(ref(db, `model_weights/${roomId}`));
     if (snapshot.exists()) {
-      console.log(`Saved weights found for ${roomId}, loading base model + applying weights...`);
-      roomModel = await tf.loadLayersModel(MODEL_URL);
+      console.log(`Saved weights found for ${roomId}, applying...`);
       const weightsData = snapshot.val();
       const weightTensors = weightsData.map(w => tf.tensor(w.data, w.shape));
       roomModel.setWeights(weightTensors);
-      console.log(`Per-room weights applied for ${roomId}`);
+      console.log("Per-room weights applied ✓");
     } else {
-      console.log(`No saved weights for ${roomId}, using base model`);
-      roomModel = await tf.loadLayersModel(MODEL_URL);
+      console.log(`No saved weights for ${roomId}, loading base weights...`);
+      const resp = await fetch(BASE_WEIGHTS_URL);
+      const weightsData = await resp.json();
+      const weightTensors = weightsData.map(w => tf.tensor(w));
+      roomModel.setWeights(weightTensors);
+      console.log("Base weights applied ✓");
     }
     console.log("Model ready!");
   } catch (err) {
@@ -109,6 +125,7 @@ async function onlineTrain(history) {
   }
 }
 
+// Chart setup
 const ctx = document.getElementById("co2-chart").getContext("2d");
 const chart = new Chart(ctx, {
   type: "line",
@@ -126,10 +143,17 @@ const chart = new Chart(ctx, {
   },
   options: {
     responsive: true,
-    plugins: { legend: { display: true } },
+    plugins: {
+      legend: { display: true }
+    },
     scales: {
-      y: { beginAtZero: false, title: { display: true, text: "CO2 (ppm)" } },
-      x: { title: { display: true, text: "Reading #" } }
+      y: {
+        beginAtZero: false,
+        title: { display: true, text: "CO2 (ppm)" }
+      },
+      x: {
+        title: { display: true, text: "Reading #" }
+      }
     }
   }
 });
@@ -145,9 +169,11 @@ function listenToRoom(roomId) {
   onValue(ref(db, `rooms/${roomId}/latest`), (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
+
     document.getElementById("co2-value").textContent  = data.co2 + " ppm";
     document.getElementById("temp-value").textContent = data.temperature + " °C";
     document.getElementById("hum-value").textContent  = data.humidity + " %";
+
     if (prevCO2 !== null && (data.co2 - prevCO2) >= 200) {
       document.getElementById("spike-alert").style.display = "block";
     } else {
