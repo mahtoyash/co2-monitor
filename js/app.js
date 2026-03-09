@@ -25,13 +25,13 @@ async function loadRoomModel(roomId) {
   const snapshot = await get(ref(db, `model_weights/${roomId}`));
   if (snapshot.exists()) {
     console.log(`Saved weights found for ${roomId}`);
-    roomModel = await tf.loadGraphModel(MODEL_URL);
+    roomModel = await tf.loadGraphModel('/co2-monitor/model/model.json');
     const weightsData = snapshot.val();
     const weightTensors = weightsData.map(w => tf.tensor(w.data, w.shape));
     roomModel.setWeights(weightTensors);
   } else {
     console.log(`No saved weights for ${roomId}, using base model`);
-    roomModel = await tf.loadGraphModel(MODEL_URL);
+    roomModel = await tf.loadGraphModel('/co2-monitor/model/model.json');
   }
   console.log("Model ready!");
 }
