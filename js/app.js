@@ -178,8 +178,7 @@ function listenToRoom(roomId) {
   });
 
   unsubHistory = onValue(ref(db, `rooms/${roomId}/history`), async (snapshot) => {
-    co2History = [];
-    snapshot.forEach(child => co2History.push(child.val()));
+    const val = snapshot.val(); co2History = val ? Object.values(val) : [];
     console.log(`History loaded: ${co2History.length} readings`);
     updateChart();
     await runPrediction(co2History);
@@ -207,3 +206,4 @@ async function init() {
 }
 
 init();
+
