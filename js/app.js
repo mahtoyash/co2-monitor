@@ -1,5 +1,6 @@
 import { db, ref, onValue, set, get } from "./firebase.js";
 import * as tf from "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/+esm";
+
 const MODEL_URL = "https://mahtoyash.github.io/co2-monitor/model/model.json";
 const SEQ_LEN = 30;
 const FEATURE_MIN = [18.04, 44.92, 415.0, 0.0, 0.0, 0.0, 0.0];
@@ -22,69 +23,89 @@ function unscaleTarget(val) {
 }
 
 async function loadRoomModel(roomId) {
-  const snapshot = await get(ref(db, `model_weights/${roomId}`));
-  if (snapshot.exists()) {
-    console.log(`Saved weights found for ${roomId}`);
-    roomModel = await tf.loadGraphModel('/co2-monitor/model/model.json');
-    const weightsData = snapshot.val();
-    const weightTensors = weightsData.map(w => tf.tensor(w.data, w.shape));
-    roomModel.setWeights(weightTensors);
-  } else {
-    console.log(`No saved weights for ${roomId}, using base model`);
-    roomModel = await tf.loadGraphModel('/co2-monitor/model/model.json');
+  try {
+    const snapshot = await get(ref(db, `model_weights/${roomId}`));
+    if (snapshot.exists()) {
+      console.log(`Saved weights found for ${roomId}, loading base model + applying weights...`);
+      roomModel = await tf.loadLayersModel(MODEL_URL);
+      const weightsData = snapshot.val();
+      const weightTensors = weightsData.map(w => tf.tensor(w.data, w.shape));
+      roomModel.setWeights(weightTensors);
+      console.log(`Per-room weights applied for ${roomId}`);
+    } else {
+      console.log(`No saved weights for ${roomId}, using base model`);
+      roomModel = await tf.loadLayersModel(MODEL_URL);
+    }
+    console.log("Model ready!");
+  } catch (err) {
+    console.error("Model load failed:", err);
   }
-  console.log("Model ready!");
 }
 
 async function saveRoomWeights(roomId) {
-  const weights = roomModel.getWeights();
-  const weightsData = await Promise.all(
-    weights.map(async (w) => ({
-      data: Array.from(await w.data()),
-      shape: w.shape
-    }))
-  );
-  await set(ref(db, `model_weights/${roomId}`), weightsData);
-  console.log(`Weights saved for ${roomId}`);
+  try {
+    const weights = roomModel.getWeights();
+    const weightsData = await Promise.all(
+      weights.map(async (w) => ({
+        data: Array.from(await w.data()),
+        shape: w.shape
+      }))
+    );
+    await set(ref(db, `model_weights/${roomId}`), weightsData);
+    console.log(`Weights saved for ${roomId}`);
+  } catch (err) {
+    console.error("Weight save failed:", err);
+  }
 }
 
 async function runPrediction(history) {
-  if (!roomModel || history.length < SEQ_LEN) return;
-  const last30 = history.slice(-SEQ_LEN);
-  const scaled = last30.map(r => scaleFeatures([
-    r.temperature, r.humidity, r.co2,
-    r.occupancy || 0, r.hour, r.day_of_week, r.minute
-  ]));
-  const input = tf.tensor3d([scaled]);
-  const output = roomModel.predict(input);
-  const preds = Array.from(await output.data());
-  document.getElementById("pred-15").textContent = Math.round(unscaleTarget(preds[0])) + " ppm";
-  document.getElementById("pred-45").textContent = Math.round(unscaleTarget(preds[1])) + " ppm";
-  document.getElementById("pred-60").textContent = Math.round(unscaleTarget(preds[2])) + " ppm";
-  input.dispose();
-  output.dispose();
+  if (!roomModel || history.length < SEQ_LEN) {
+    console.log(`Not enough history: ${history.length}/${SEQ_LEN} readings`);
+    return;
+  }
+  try {
+    const last30 = history.slice(-SEQ_LEN);
+    const scaled = last30.map(r => scaleFeatures([
+      r.temperature, r.humidity, r.co2,
+      r.occupancy || 0, r.hour, r.day_of_week, r.minute
+    ]));
+    const input = tf.tensor3d([scaled], [1, SEQ_LEN, 7]);
+    const output = roomModel.predict(input);
+    const preds = Array.from(await output.data());
+    document.getElementById("pred-15").textContent = Math.round(unscaleTarget(preds[0])) + " ppm";
+    document.getElementById("pred-45").textContent = Math.round(unscaleTarget(preds[1])) + " ppm";
+    document.getElementById("pred-60").textContent = Math.round(unscaleTarget(preds[2])) + " ppm";
+    input.dispose();
+    output.dispose();
+  } catch (err) {
+    console.error("Prediction failed:", err);
+  }
 }
 
 async function onlineTrain(history) {
   if (!roomModel || history.length < SEQ_LEN + 1) return;
-  const last31 = history.slice(-(SEQ_LEN + 1));
-  const inputSeq = last31.slice(0, SEQ_LEN);
-  const target = last31[SEQ_LEN];
-  const scaled = inputSeq.map(r => scaleFeatures([
-    r.temperature, r.humidity, r.co2,
-    r.occupancy || 0, r.hour, r.day_of_week, r.minute
-  ]));
-  const targetScaled = (target.co2 - TARGET_MIN) / (TARGET_MAX - TARGET_MIN);
-  const xs = tf.tensor3d([scaled]);
-  const ys = tf.tensor2d([[targetScaled, targetScaled, targetScaled]]);
-  roomModel.compile({ optimizer: tf.train.adam(0.001), loss: "meanSquaredError" });
-  await roomModel.fit(xs, ys, { epochs: 1, verbose: 0 });
-  xs.dispose();
-  ys.dispose();
-  newSamplesBuffer.push(1);
-  if (newSamplesBuffer.length >= 10) {
-    await saveRoomWeights(currentRoom);
-    newSamplesBuffer = [];
+  try {
+    const last31 = history.slice(-(SEQ_LEN + 1));
+    const inputSeq = last31.slice(0, SEQ_LEN);
+    const target = last31[SEQ_LEN];
+    const scaled = inputSeq.map(r => scaleFeatures([
+      r.temperature, r.humidity, r.co2,
+      r.occupancy || 0, r.hour, r.day_of_week, r.minute
+    ]));
+    const targetScaled = (target.co2 - TARGET_MIN) / (TARGET_MAX - TARGET_MIN);
+    const xs = tf.tensor3d([scaled], [1, SEQ_LEN, 7]);
+    const ys = tf.tensor2d([[targetScaled, targetScaled, targetScaled]]);
+    roomModel.compile({ optimizer: tf.train.adam(0.001), loss: "meanSquaredError" });
+    await roomModel.fit(xs, ys, { epochs: 1, verbose: 0 });
+    xs.dispose();
+    ys.dispose();
+    newSamplesBuffer.push(1);
+    if (newSamplesBuffer.length >= 10) {
+      await saveRoomWeights(currentRoom);
+      newSamplesBuffer = [];
+    }
+  } catch (err) {
+    console.error("Online training failed:", err);
   }
 }
 
@@ -97,13 +118,19 @@ const chart = new Chart(ctx, {
       label: "CO2 (ppm)",
       data: [],
       borderColor: "#4CAF50",
+      backgroundColor: "rgba(76, 175, 80, 0.1)",
       tension: 0.4,
-      fill: false
+      fill: true,
+      pointRadius: 3
     }]
   },
   options: {
     responsive: true,
-    scales: { y: { beginAtZero: false } }
+    plugins: { legend: { display: true } },
+    scales: {
+      y: { beginAtZero: false, title: { display: true, text: "CO2 (ppm)" } },
+      x: { title: { display: true, text: "Reading #" } }
+    }
   }
 });
 
@@ -145,12 +172,14 @@ async function init() {
   document.getElementById("room-select").addEventListener("change", async (e) => {
     currentRoom = e.target.value;
     newSamplesBuffer = [];
+    prevCO2 = null;
+    co2History = [];
     await loadRoomModel(currentRoom);
     listenToRoom(currentRoom);
   });
 
   document.getElementById("occupancy-btn").addEventListener("click", () => {
-    const val = parseInt(document.getElementById("occupancy-input").value);
+    const val = parseInt(document.getElementById("occupancy-input").value) || 0;
     set(ref(db, `rooms/${currentRoom}/latest/occupancy`), val);
   });
 }
