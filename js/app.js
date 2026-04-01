@@ -1,11 +1,11 @@
 import { db, ref, onValue, set, get } from "./firebase.js";
 
-const BASE_WEIGHTS_URL = "https://mahtoyash.github.io/co2-monitor/model/base_weights.json";
-const SEQ_LEN = 30;
-const FEATURE_MIN = [18.04, 44.92, 415.0, 0.0, 0.0, 0.0, 0.0];
-const FEATURE_MAX = [25.57, 58.15, 1400.0, 60.0, 23.0, 6.0, 59.0];
-const TARGET_MIN = 415.0;
-const TARGET_MAX = 1400.0;
+const BASE_WEIGHTS_URL = "model/base_weights.json";
+const SEQ_LEN = 24;
+const FEATURE_MIN = [11.6, 21.8, 0.0, 400.0, 0.0, 0.0, 0.0];
+const FEATURE_MAX = [25.6, 80.9, 29.0, 1368.0, 23.0, 6.0, 50.0];
+const TARGET_MIN = 400.0;
+const TARGET_MAX = 1368.0;
 
 let currentRoom = "room1";
 let roomModel = null;
@@ -17,13 +17,12 @@ let unsubHistory = null;
 
 function buildModel() {
   const model = tf.sequential();
-  model.add(tf.layers.lstm({ units: 256, returnSequences: true, inputShape: [30, 7] }));
-  model.add(tf.layers.lstm({ units: 256, returnSequences: true }));
-  model.add(tf.layers.lstm({ units: 256, returnSequences: false }));
+  model.add(tf.layers.lstm({ units: 128, returnSequences: true, inputShape: [24, 7] }));
+  model.add(tf.layers.lstm({ units: 128, returnSequences: false }));
   model.add(tf.layers.dense({ units: 32, activation: "relu" }));
   model.add(tf.layers.dropout({ rate: 0.2 }));
   model.add(tf.layers.dense({ units: 3 }));
-  model.predict(tf.zeros([1, 30, 7]));
+  model.predict(tf.zeros([1, 24, 7]));
   return model;
 }
 
@@ -81,10 +80,10 @@ async function runPrediction(history) {
     return;
   }
   try {
-    const last30 = history.slice(-SEQ_LEN);
-    const scaled = last30.map(r => scaleFeatures([
-      r.temperature, r.humidity, r.co2,
-      r.occupancy || 0, r.hour, r.day_of_week, r.minute
+    const lastSeq = history.slice(-SEQ_LEN);
+    const scaled = lastSeq.map(r => scaleFeatures([
+      r.temperature, r.humidity, r.occupancy || 0, r.co2,
+      r.hour, r.day_of_week, r.minute
     ]));
     const input = tf.tensor3d([scaled], [1, SEQ_LEN, 7]);
     const output = roomModel.predict(input);
@@ -106,8 +105,8 @@ async function onlineTrain(history) {
     const inputSeq = last31.slice(0, SEQ_LEN);
     const target = last31[SEQ_LEN];
     const scaled = inputSeq.map(r => scaleFeatures([
-      r.temperature, r.humidity, r.co2,
-      r.occupancy || 0, r.hour, r.day_of_week, r.minute
+      r.temperature, r.humidity, r.occupancy || 0, r.co2,
+      r.hour, r.day_of_week, r.minute
     ]));
     const targetScaled = (target.co2 - TARGET_MIN) / (TARGET_MAX - TARGET_MIN);
     const xs = tf.tensor3d([scaled], [1, SEQ_LEN, 7]);
