@@ -6,7 +6,7 @@ Transform the Aira CO₂ Dashboard from its current Charcoal+Amber palette into 
 User Review Required
 IMPORTANT
 
-The color palette will shift from Amber (#f59e0b) to a new tri-accent system: Electric Violet (#BF5AF2), Cyber Pink (#FF375F), and Arctic Blue (#0A84FF). The primary accent used for active states, charts, and highlights will be Electric Violet.
+
 
 WARNING
 
